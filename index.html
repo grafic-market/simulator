@@ -1,0 +1,168 @@
+// IMPORT LIBRERIE
+import React, { useState, useEffect, useRef } from "react";
+import { Line } from "react-chartjs-2";
+import Chart from 'chart.js/auto';
+
+const CARD_TIERS = [
+  { name: "🖤 Black", threshold: 1_000_000_000 },
+  { name: "💎 Diamante", threshold: 1_000_000 },
+  { name: "🔵 Platinum", threshold: 500_000 },
+  { name: "🟡 Orum", threshold: 100_000 },
+  { name: "⚪ Argentum", threshold: 10_000 },
+];
+
+const MAX_HISTORY = 100;
+
+export default function TradingSimulator() {
+  const [username, setUsername] = useState(localStorage.getItem("username") || "");
+  const [connected, setConnected] = useState(false);
+  const [balance, setBalance] = useState(() => parseFloat(localStorage.getItem("balance")) || 1000);
+  const [shares, setShares] = useState(() => parseInt(localStorage.getItem("shares")) || 0);
+  const [price, setPrice] = useState(() => parseFloat(localStorage.getItem("price")) || 100);
+  const [history, setHistory] = useState(() => JSON.parse(localStorage.getItem("history")) || [100]);
+  const [log, setLog] = useState(() => JSON.parse(localStorage.getItem("log")) || []);
+  const [card, setCard] = useState(() => localStorage.getItem("card") || null);
+  const [cycle, setCycle] = useState(() => parseInt(localStorage.getItem("cycle")) || 0);
+  const [marketNews, setMarketNews] = useState("Nessuna notizia");
+  const chartRef = useRef();
+  const socketRef = useRef(null);
+
+  const NEWS_EVENTS = [
+    "📉 Crisi economica in arrivo!",
+    "📈 Boom tecnologico in corso!",
+    "🏦 Le banche alzano i tassi di interesse.",
+    "📊 Mercato stabile, poche variazioni.",
+    "🌍 Tensioni geopolitiche aumentano l'incertezza."
+  ];
+
+  useEffect(() => {
+    localStorage.setItem("balance", balance);
+    localStorage.setItem("shares", shares);
+    localStorage.setItem("price", price);
+    localStorage.setItem("history", JSON.stringify(history));
+    localStorage.setItem("log", JSON.stringify(log));
+    localStorage.setItem("card", card);
+    localStorage.setItem("cycle", cycle);
+    localStorage.setItem("username", username);
+  }, [balance, shares, price, history, log, card, cycle, username]);
+
+  useEffect(() => {
+    if (!connected && username) {
+      const socket = new WebSocket("ws://localhost:3001");
+      socket.onopen = () => {
+        socket.send(JSON.stringify({ type: "login", username }));
+        setConnected(true);
+        socketRef.current = socket;
+      };
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "priceUpdate") {
+          setPrice(data.price);
+          setHistory(h => [...h.slice(-MAX_HISTORY + 1), data.price]);
+          setCycle(c => c + 1);
+        }
+        if (data.type === "news") {
+          setMarketNews(data.message);
+          addLog(`📰 Notizia di mercato: ${data.message}`);
+        }
+        if (data.type === "buy" || data.type === "sell") {
+          addLog(data.message);
+        }
+      };
+    }
+  }, [username, connected]);
+
+  useEffect(() => {
+    if (cycle > 0 && cycle % 25 === 0 && shares > 0) {
+      const payout = +(shares * price * 0.01).toFixed(2);
+      setBalance(b => b + payout);
+      addLog(`💸 Ricevuti dividendi: ${payout}€`);
+    }
+    aggiornaCarta(balance);
+  }, [cycle]);
+
+  const aggiornaCarta = (budget) => {
+    const nuova = CARD_TIERS.find(c => budget >= c.threshold);
+    if (nuova && nuova.name !== card) setCard(nuova.name);
+  };
+
+  const sendTrade = (type) => {
+    if (!socketRef.current) return;
+    if (type === "buy" && balance >= price) {
+      setBalance(b => b - price);
+      setShares(s => s + 1);
+      socketRef.current.send(JSON.stringify({ type: "buy", username, price }));
+      addLog(`🟢 Comprata 1 azione a ${price.toFixed(2)}€`);
+    } else if (type === "sell" && shares > 0) {
+      setBalance(b => b + price);
+      setShares(s => s - 1);
+      socketRef.current.send(JSON.stringify({ type: "sell", username, price }));
+      addLog(`🔴 Venduta 1 azione a ${price.toFixed(2)}€`);
+    } else {
+      addLog(`⚠️ Operazione non valida.`);
+    }
+  };
+
+  const addLog = (entry) => {
+    setLog(l => [...l.slice(-99), `${new Date().toLocaleTimeString()} - ${entry}`]);
+  };
+
+  const resetGame = () => {
+    if (window.confirm("Sei sicuro di voler resettare tutto?")) {
+      localStorage.clear();
+      window.location.reload();
+    }
+  };
+
+  if (!username) {
+    return (
+      <div className="p-4">
+        <h1 className="text-xl font-bold">Inserisci nome giocatore</h1>
+        <input
+          type="text"
+          className="border p-2 mt-2"
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Username"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-bold">📊 Simulatore Borsa Multiplayer</h1>
+      <p>👤 <strong>{username}</strong> | 💶 <strong>{balance.toFixed(2)}€</strong> | 📈 <strong>{shares} azioni</strong> | 🎖 {card || "Nessuna carta"}</p>
+      <p className="text-sm italic">📰 {marketNews}</p>
+
+      <div className="space-x-2">
+        <button onClick={() => sendTrade("buy")} className="bg-green-600 px-4 py-2 text-white rounded">Compra</button>
+        <button onClick={() => sendTrade("sell")} className="bg-red-600 px-4 py-2 text-white rounded">Vendi</button>
+        <button onClick={resetGame} className="bg-gray-500 px-4 py-2 text-white rounded">Reset</button>
+      </div>
+
+      <Line
+        ref={chartRef}
+        data={{
+          labels: history.map((_, i) => i + 1),
+          datasets: [
+            {
+              label: "Prezzo Azione",
+              data: history,
+              borderColor: "#3b82f6",
+              backgroundColor: "rgba(59, 130, 246, 0.1)",
+              tension: 0.3
+            }
+          ]
+        }}
+        options={{ responsive: true }}
+      />
+
+      <div className="mt-4 max-h-60 overflow-y-auto bg-gray-100 p-3 rounded shadow-inner">
+        <h2 className="font-bold mb-2">📜 Log delle operazioni</h2>
+        {log.slice().reverse().map((entry, i) => (
+          <p key={i} className="text-sm">• {entry}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
